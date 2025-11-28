@@ -1,0 +1,60 @@
+services:
+  db_postgres:
+    image: postgres:18
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: db_penjualan
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d db_penjualan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  # pipeline:
+  #   build: .
+  #   command: ["python", "etl/pipeline.py"]
+  #   environment:
+  #     POSTGRES_USER: admin
+  #     POSTGRES_PASSWORD: admin
+  #     POSTGRES_DB: db_penjualan
+  #     POSTGRES_HOST: db_postgres
+  #   depends_on:
+  #     db_postgres:
+  #       condition: service_healthy
+
+  etl_service:
+    build: .
+    command: ["etl"]
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: db_penjualan
+      POSTGRES_HOST: db_postgres
+    volumes:
+      - ./data:/usr/src/app/data
+      - ./logs:/usr/src/app/logs
+    depends_on:
+      db_postgres:
+        condition: service_healthy
+  streamlit:
+    build: .
+    command: ["streamlit"]
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: db_penjualan
+      POSTGRES_HOST: db_postgres
+    ports:
+      - "8501:8501"
+    depends_on:
+      db_postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
