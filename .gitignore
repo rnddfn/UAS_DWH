@@ -1,6 +1,7 @@
 .env
 logs/
 __pycache__/
+.env
 *.pyc
 data/raw/*
 dags/__pycache__/

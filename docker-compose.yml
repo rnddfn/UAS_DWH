@@ -16,6 +16,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - airflow-net
   # pipeline:
   #   build: .
   #   command: ["python", "etl/pipeline.py"]
@@ -28,20 +30,20 @@ services:
   #     db_postgres:
   #       condition: service_healthy
 
-  etl_service:
-    build: .
-    command: ["etl"]
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: db_penjualan
-      POSTGRES_HOST: db_postgres
-    volumes:
-      - ./data:/usr/src/app/data
-      - ./logs:/usr/src/app/logs
-    depends_on:
-      db_postgres:
-        condition: service_healthy
+  # etl_service:
+  #   build: .
+  #   command: ["etl"]
+  #   environment:
+  #     POSTGRES_USER: admin
+  #     POSTGRES_PASSWORD: admin
+  #     POSTGRES_DB: db_penjualan
+  #     POSTGRES_HOST: db_postgres
+  #   volumes:
+  #     - ./data:/usr/src/app/data
+  #     - ./logs:/usr/src/app/logs
+  #   depends_on:
+  #     db_postgres:
+  #       condition: service_healthy
   streamlit:
     build: .
     command: ["streamlit"]
@@ -56,5 +58,58 @@ services:
       db_postgres:
         condition: service_healthy
 
+  redis:
+    image: redis:7
+    networks:
+      - airflow-net
+
+  airflow:
+    image: apache/airflow:2.8.0
+    depends_on:
+      - db_postgres
+      - redis
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:admin@db_postgres/db_penjualan
+      AIRFLOW__CORE__FERNET_KEY: "m-rQGSvNdCYWWpL2cTjWd7CtfVam2-qfWku9yyvGDOo="
+      AIRFLOW__WEBSERVER__RBAC: "True"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "airflow db init &&
+               airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true &&
+               airflow webserver"
+    networks:
+      - airflow-net
+
+  airflow-scheduler:
+    image: apache/airflow:2.8.0
+    depends_on:
+      - db_postgres
+      - redis
+      - airflow
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://admin:admin@db_postgres/db_penjualan
+      AIRFLOW__CORE__FERNET_KEY: "a_fernet_key_here"
+      AIRFLOW__WEBSERVER__RBAC: "True"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: airflow scheduler
+    networks:
+      - airflow-net
+
 volumes:
   postgres_data:
+
+networks:
+  airflow-net:
+    name: airflow-net

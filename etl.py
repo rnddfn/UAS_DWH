@@ -1,9 +1,8 @@
-# etl.py
 import os
 import pandas as pd
 from sqlalchemy import create_engine, text
 import logging
-import requests # <-- DIPASTIKAN ADA
+import requests
 
 # --- 1. Konfigurasi Logging ---
 os.makedirs('logs', exist_ok=True) 
@@ -38,7 +37,6 @@ try:
         schema_sql = f.read()
     
     with engine.connect() as conn:
-        # Drop tabel yang mungkin sudah ada
         try:
             conn.execute(text("DROP TABLE IF EXISTS dwh.factsales CASCADE;"))
             conn.execute(text("DROP TABLE IF EXISTS dwh.dimweather CASCADE;"))
