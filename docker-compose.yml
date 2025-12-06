@@ -2,10 +2,8 @@ services:
   db_postgres:
     image: postgres:18
     container_name: postgres_db
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: db_penjualan
+    env_file:
+      - .env
     ports:
       - "5432:5432"
     volumes:
@@ -57,6 +55,8 @@ services:
     depends_on:
       db_postgres:
         condition: service_healthy
+    networks:
+      - airflow-net
 
   redis:
     image: redis:7

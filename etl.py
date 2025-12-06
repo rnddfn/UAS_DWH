@@ -28,9 +28,13 @@ try:
     logging.info("Koneksi ke database Postgres berhasil!")
 
     with engine.connect() as conn:
-        conn.execute(text("CREATE SCHEMA IF NOT EXISTS staging;"))
+        # Reset schema staging agar bersih dari tabel mentah sisa eksekusi lama
+        conn.execute(text("DROP SCHEMA IF EXISTS staging CASCADE;"))
+        conn.execute(text("CREATE SCHEMA staging;"))
+        
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS datalake;")) # <-- Tambahan Data Lake
         conn.commit() 
-    logging.info("Schema 'staging' dipastikan ada.")
+    logging.info("Schema 'staging' (bersih) dan 'datalake' dipastikan ada.")
     
     # Buat schema dan tabel DWH dari scheme.sql
     with open('scheme.sql', 'r') as f:
@@ -79,6 +83,12 @@ def load_calendar_and_holidays_to_staging(year=2018, country_code='US'):
         
         # 2. Ambil API Liburan
         logging.info(f"Mengambil data libur untuk {country_code}...")
+        
+        # Load Calendar ke Data Lake (Tanpa Merge)
+        df_calendar['FullDate'] = df_calendar['FullDate'].dt.date
+        df_calendar.to_sql('calendar_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
+        logging.info("Berhasil memuat datalake.calendar_mentah.")
+
         response = requests.get(f"https://date.nager.at/api/v3/PublicHolidays/{year}/{country_code}")
         response.raise_for_status() 
         holidays_data = response.json()
@@ -90,74 +100,82 @@ def load_calendar_and_holidays_to_staging(year=2018, country_code='US'):
             lambda x: ', '.join(x)
         ).reset_index()
         df_holidays_grouped = df_holidays_grouped.rename(columns={'name': 'HolidayName'})
-        df_holidays_grouped['IsHoliday'] = True
         
-        # 4. Gabungkan kalender dengan data liburan yang SEKARANG SUDAH UNIK
-        df_calendar['FullDate'] = df_calendar['FullDate'].dt.date
-        
-        # Merge ini sekarang aman (1-ke-1)
-        df_final_date = pd.merge(df_calendar, df_holidays_grouped, on='FullDate', how='left')
-        
-        # Isi nilai default untuk yang bukan hari libur
-        df_final_date['IsHoliday'] = df_final_date['IsHoliday'].fillna(False)
-        df_final_date['HolidayName'] = df_final_date['HolidayName'].fillna('') # Isi string kosong
-        
-        # 5. Load ke Staging
-        df_final_date.to_sql('dimdate_mentah', con=engine, schema='staging', if_exists='replace', index=False)
-        logging.info("Berhasil memuat staging.dimdate_mentah (dengan deduplikasi).")
+        # Load Holidays ke Data Lake (Tabel Terpisah)
+        df_holidays_grouped.to_sql('holidays_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
+        logging.info("Berhasil memuat datalake.holidays_mentah.")
         
     except Exception as e:
         logging.error(f"Error memuat DimDate: {e}")
         raise e
 
+def validate_dwh_counts():
+    """
+    Memvalidasi apakah data berhasil masuk ke tabel DWH.
+    """
+    logging.info("Validating DWH row counts...")
+    tables = [
+        'dwh.factsales', 'dwh.dimproduct', 'dwh.dimcustomer', 
+        'dwh.dimemployee', 'dwh.dimlocation', 'dwh.dimdate', 'dwh.dimweather'
+    ]
+    
+    with engine.connect() as conn:
+        for table in tables:
+            try:
+                count = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                logging.info(f"Table {table} has {count} rows.")
+                if count == 0:
+                    logging.warning(f"⚠️ Table {table} is empty!")
+            except Exception as e:
+                logging.error(f"Could not validate table {table}: {e}")
+
 # --- FUNGSI UTAMA ---
 def run_elt():
     try:
-        # FASE 1: "Load ke Staging" (Ini adalah proses E-L)
-        logging.info("Memulai Extract & Load CSV ke Staging...")
+        # FASE 1: "Load ke Data Lake" (Ini adalah proses E-L)
+        logging.info("Memulai Extract & Load CSV ke Data Lake...")
 
-        # Baca CSV, Load ke Staging
+        # Baca CSV, Load ke Data Lake
         df_products = pd.read_csv('./data/raw/products.csv')
-        df_products.to_sql('products_mentah', con=engine, schema='staging', if_exists='replace', index=False)
+        df_products.to_sql('products_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
         del df_products
-        logging.info("Berhasil memuat staging.products_mentah.") # <-- PERBAIKAN LOG
+        logging.info("Berhasil memuat datalake.products_mentah.") 
         
         df_categories = pd.read_csv('./data/raw/categories.csv')
-        df_categories.to_sql('categories_mentah', con=engine, schema='staging', if_exists='replace', index=False)
+        df_categories.to_sql('categories_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
         del df_categories
-        logging.info("Berhasil memuat staging.categories_mentah.")
+        logging.info("Berhasil memuat datalake.categories_mentah.")
         
         df_employees = pd.read_csv('./data/raw/employees.csv')
-        df_employees.to_sql('employees_mentah', con=engine, schema='staging', if_exists='replace', index=False)
+        df_employees.to_sql('employees_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
         del df_employees
-        logging.info("Berhasil memuat staging.employees_mentah.")
+        logging.info("Berhasil memuat datalake.employees_mentah.")
 
         df_customers = pd.read_csv('./data/raw/customers.csv')
-        df_customers.to_sql('customers_mentah', con=engine, schema='staging', if_exists='replace', index=False)
+        df_customers.to_sql('customers_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
         del df_customers
-        logging.info("Berhasil memuat staging.customers_mentah.")
+        logging.info("Berhasil memuat datalake.customers_mentah.")
 
-                # KODE BENAR
         df_cities = pd.read_csv('./data/raw/cities_MODIFIED_with_coords.csv')
         df_cities.to_sql(
             'cities_mentah', 
-            con=engine,         # <-- Tulis 'con=engine' BUKAN '...'
-            schema='staging', 
+            con=engine,         
+            schema='datalake', 
             if_exists='replace', 
             index=False
         )
         del df_cities
-        logging.info("Berhasil memuat staging.cities_mentah.")
+        logging.info("Berhasil memuat datalake.cities_mentah.")
 
         df_countries = pd.read_csv('./data/raw/countries.csv')
-        df_countries.to_sql('countries_mentah', con=engine, schema='staging', if_exists='replace', index=False)
+        df_countries.to_sql('countries_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
         del df_countries
-        logging.info("Berhasil memuat staging.countries_mentah.")
+        logging.info("Berhasil memuat datalake.countries_mentah.")
         
         df_weather = pd.read_csv('./data/raw/weather_mentah.csv')
-        df_weather.to_sql('weather_mentah', con=engine, schema='staging', if_exists='replace', index=False)
+        df_weather.to_sql('weather_mentah', con=engine, schema='datalake', if_exists='replace', index=False)
         del df_weather
-        logging.info("Berhasil memuat staging.weather_mentah.")
+        logging.info("Berhasil memuat datalake.weather_mentah.")
 
         # --- Load Sales (Gunakan chunking jika file besar) ---
         logging.info("Memproses file sales (chunking)...")
@@ -166,7 +184,7 @@ def run_elt():
         
         # Hapus tabel lama (jika ada) HANYA SEKALI
         with engine.connect() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS staging.sales_mentah;"))
+            conn.execute(text("DROP TABLE IF EXISTS datalake.sales_mentah;"))
             conn.commit()
 
         for i, chunk in enumerate(sales_iterator):
@@ -174,14 +192,14 @@ def run_elt():
             chunk.to_sql(
                 'sales_mentah',
                 con=engine,
-                schema='staging',
+                schema='datalake',
                 if_exists='append', 
                 index=False
             )
             del chunk
-        logging.info("Berhasil memuat staging.sales_mentah.")
+        logging.info("Berhasil memuat datalake.sales_mentah.")
         
-        logging.info("FASE 1 (CSV) SELESAI: Staging area terisi.")
+        logging.info("FASE 1 (CSV) SELESAI: Data Lake terisi.")
 
         # --- FASE 1 (API) ---
         logging.info("Memulai Fase 1 (API)...")
@@ -193,11 +211,176 @@ def run_elt():
         # FASE 2: TRANSFORMASI (T)
         # (TAMBAHKAN SEMUA KODE DI BAWAH INI)
         # ==========================================================
-        logging.info("Memulai Fase 2: Transformasi (Staging ke DWH)...")
+        logging.info("Memulai Fase 2: Transformasi (Data Lake ke Staging)...")
         
         # Ini adalah satu string SQL besar yang berisi semua logika transformasi
         transform_sql = """
-        -- ========= FASE 2.1: KOSONGKAN TABEL DWH (Agar Idempotent) =========
+        -- ========= FASE 2.1: BERSIHKAN STAGING (Agar Idempotent) =========
+        DROP TABLE IF EXISTS staging.factsales CASCADE;
+        DROP TABLE IF EXISTS staging.dimproduct CASCADE;
+        DROP TABLE IF EXISTS staging.dimcustomer CASCADE;
+        DROP TABLE IF EXISTS staging.dimemployee CASCADE;
+        DROP TABLE IF EXISTS staging.dimlocation CASCADE;
+        DROP TABLE IF EXISTS staging.dimdate CASCADE;
+        DROP TABLE IF EXISTS staging.dimweather CASCADE;
+
+        -- ========= FASE 2.2: TRANSFORMASI KE STAGING (dari Data Lake) =========
+
+        -- 2.2.1. Transform ke staging.dimdate
+        CREATE TABLE staging.dimdate AS
+        SELECT
+            c."DateID" as dateid,
+            c."FullDate" as fulldate,
+            c."Day" as day,
+            c."Month" as month,
+            c."MonthName" as monthname,
+            c."Quarter" as quarter,
+            c."Year" as year,
+            c."DayOfWeek" as dayofweek,
+            CASE WHEN h."HolidayName" IS NOT NULL THEN TRUE ELSE FALSE END as isholiday,
+            COALESCE(h."HolidayName", '') as holidayname
+        FROM datalake.calendar_mentah c
+        LEFT JOIN datalake.holidays_mentah h ON c."FullDate" = h."FullDate";
+
+        -- 2.2.2. Transform ke staging.dimlocation
+        CREATE TABLE staging.dimlocation AS
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY "CityID") as locationid,
+            "CityID" as cityid_oltp,
+            TRIM("CityName") as cityname,
+            'United States' as countryname
+        FROM (SELECT DISTINCT * FROM datalake.cities_mentah) c;
+
+        -- 2.2.3. Transform ke staging.dimproduct
+        CREATE TABLE staging.dimproduct AS
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY p."ProductID") as productid,
+            p."ProductID" as productid_oltp,
+            TRIM(p."ProductName") as productname,
+            p."Price" as price,
+            TRIM(c."CategoryName") as categoryname,
+            TRIM(p."Class") as class,
+            TRIM(p."IsAllergic") as isallergic
+        FROM (SELECT DISTINCT * FROM datalake.products_mentah) p
+        LEFT JOIN (SELECT DISTINCT * FROM datalake.categories_mentah) c ON p."CategoryID" = c."CategoryID";
+
+        -- 2.2.4. Transform ke staging.dimcustomer
+        CREATE TABLE staging.dimcustomer AS
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY c."CustomerID") as customerid,
+            c."CustomerID" as customerid_oltp,
+            TRIM(c."FirstName") as customername,
+            TRIM(c."Address") as address,
+            TRIM(ci."CityName") as customercityname,
+            TRIM(co."CountryName") as customercountryname
+        FROM (SELECT DISTINCT * FROM datalake.customers_mentah) c
+        LEFT JOIN (SELECT DISTINCT * FROM datalake.cities_mentah) ci ON c."CityID" = ci."CityID"
+        LEFT JOIN (SELECT DISTINCT * FROM datalake.countries_mentah) co ON ci."CountryID" = co."CountryID";
+
+        -- 2.2.5. Transform ke staging.dimemployee
+        CREATE TABLE staging.dimemployee AS
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY "EmployeeID") as employeeid,
+            "EmployeeID" as employeeid_oltp,
+            TRIM("FirstName") as employeename,
+            TRIM("Gender") as gender,
+            "HireDate"::DATE as hiredate
+        FROM (SELECT DISTINCT * FROM datalake.employees_mentah) e;
+
+        -- 2.2.6. Transform ke staging.dimweather
+        CREATE TABLE staging.dimweather AS
+        SELECT
+            ROW_NUMBER() OVER (ORDER BY w."time", w."CityName") as weatherid,
+            NULL::text AS condition,
+            w."temperature_2m_max"        AS temperature_c,
+            NULL::float                   AS feelslike_c,
+            w."windspeed_10m_max"        AS wind_kph,
+            w."precipitation_sum"        AS precip_mm,
+            NULL::int                    AS isday,
+            d.dateid,
+            l.locationid
+        FROM (SELECT DISTINCT * FROM datalake.weather_mentah) w
+        LEFT JOIN staging.dimdate d
+            ON w."time"::DATE = d.fulldate
+        LEFT JOIN staging.dimlocation l
+            ON TRIM(w."CityName") = l.cityname;
+
+        -- ========= FASE 2.3: TRANSFORMASI FAKTA KE STAGING =========
+        CREATE TABLE staging.factsales AS
+        SELECT
+            d.dateid,
+            w.weatherid,
+            p.productid,
+            c.customerid,
+            e.employeeid,
+            l.locationid,
+            s."Quantity"::INT as quantity,
+            -- Hitung TotalPrice karena di CSV nilainya 0
+            (s."Quantity"::INT * p.price * (1 - COALESCE(s."Discount"::DECIMAL(10, 2), 0)))::DECIMAL(10, 2) as totalprice,
+            s."Discount"::DECIMAL(10, 2) as discount
+        FROM (SELECT DISTINCT * FROM datalake.sales_mentah) s
+        LEFT JOIN staging.dimdate d
+            ON s."SalesDate"::DATE = d.fulldate
+        LEFT JOIN staging.dimproduct p
+            ON s."ProductID" = p.productid_oltp
+        LEFT JOIN staging.dimcustomer c
+            ON s."CustomerID" = c.customerid_oltp
+        LEFT JOIN staging.dimemployee e
+            ON s."SalesPersonID" = e.employeeid_oltp
+        LEFT JOIN staging.dimlocation l
+            ON c.customercityname = l.cityname
+        LEFT JOIN staging.dimweather w
+            ON d.dateid = w.dateid AND l.locationid = w.locationid;
+        """
+        
+        # Jalankan satu kueri besar ini di database
+        with engine.begin() as conn:  
+            conn.execute(text(transform_sql))
+            
+        logging.info("FASE 2: Transformasi SELESAI.")
+
+        # ========= FASE 2.5: DATA QUALITY CHECKS (GOVERNANCE) =========
+        logging.info("=== Memulai Data Quality Checks (Governance) ===")
+        dq_checks = [
+            {
+                "name": "Negative Quantity Check",
+                "query": "SELECT COUNT(*) FROM staging.factsales WHERE quantity < 0",
+                "threshold": 0
+            },
+            {
+                "name": "Negative Price Check",
+                "query": "SELECT COUNT(*) FROM staging.factsales WHERE totalprice < 0",
+                "threshold": 0
+            },
+            {
+                "name": "Null Product ID in Fact",
+                "query": "SELECT COUNT(*) FROM staging.factsales WHERE productid IS NULL",
+                "threshold": 0
+            },
+             {
+                "name": "Null Customer ID in Fact",
+                "query": "SELECT COUNT(*) FROM staging.factsales WHERE customerid IS NULL",
+                "threshold": 0
+            }
+        ]
+        
+        with engine.connect() as conn:
+            dq_failed = False
+            for check in dq_checks:
+                result = conn.execute(text(check['query'])).scalar()
+                if result > check['threshold']:
+                    logging.error(f"DQ FAILED: {check['name']} found {result} bad rows.")
+                    dq_failed = True
+                else:
+                    logging.info(f"DQ PASSED: {check['name']}")
+            
+            if dq_failed:
+                raise ValueError("Data Quality Checks Failed! Pipeline dihentikan sebelum Load ke DWH.")
+
+        logging.info("=== Data Quality Checks Selesai (PASSED) ===")
+
+        # ========= FASE 3: LOAD KE DWH (Final) =========
+        load_sql = """
         TRUNCATE TABLE dwh.factsales RESTART IDENTITY CASCADE;
         TRUNCATE TABLE dwh.dimproduct RESTART IDENTITY CASCADE;
         TRUNCATE TABLE dwh.dimcustomer RESTART IDENTITY CASCADE;
@@ -206,126 +389,22 @@ def run_elt():
         TRUNCATE TABLE dwh.dimdate RESTART IDENTITY CASCADE;
         TRUNCATE TABLE dwh.dimweather RESTART IDENTITY CASCADE;
 
-        -- ========= FASE 2.2: LOAD TABEL DIMENSI (dari Staging) =========
-
-        -- 2.2.1. Load dwh.dimdate (dari staging.dimdate_mentah)
-        INSERT INTO dwh.dimdate (
-            dateid, fulldate, day, month, monthname,
-            quarter, year, dayofweek, isholiday, holidayname
-        )
-        SELECT
-            "DateID", "FullDate", "Day", "Month", "MonthName",
-            "Quarter", "Year", "DayOfWeek", "IsHoliday", "HolidayName"
-        FROM staging.dimdate_mentah;
-
-        -- 2.2.2. Load dwh.dimlocation (dari staging.cities_mentah)
-        INSERT INTO dwh.dimlocation (
-            locationid, cityid_oltp, cityname, countryname
-        )
-        SELECT
-            "CityID",
-            "CityID",
-            "CityName",
-            'United States'
-        FROM staging.cities_mentah;
-
-        -- 2.2.3. Load dwh.dimproduct (gabungan produk + kategori)
-        INSERT INTO dwh.dimproduct (
-            productid_oltp, productname, price,
-            categoryname, class, isallergic
-        )
-        SELECT
-            p."ProductID",
-            p."ProductName",
-            p."Price",
-            c."CategoryName",
-            p."Class",
-            p."IsAllergic"
-        FROM staging.products_mentah p
-        LEFT JOIN staging.categories_mentah c ON p."CategoryID" = c."CategoryID";
-
-        -- 2.2.4. Load dwh.dimcustomer
-        INSERT INTO dwh.dimcustomer (
-            customerid_oltp, customername, address,
-            customercityname, customercountryname
-        )
-        SELECT
-            c."CustomerID",
-            c."FirstName",
-            c."Address",
-            ci."CityName",
-            co."CountryName"
-        FROM staging.customers_mentah c
-        LEFT JOIN staging.cities_mentah ci ON c."CityID" = ci."CityID"
-        LEFT JOIN staging.countries_mentah co ON ci."CountryID" = co."CountryID";
-
-        -- 2.2.5. Load dwh.dimemployee
-        INSERT INTO dwh.dimemployee (
-            employeeid_oltp, employeename, gender, hiredate
-        )
-        SELECT
-            "EmployeeID",
-            "FirstName",
-            "Gender",
-            "HireDate"::DATE
-        FROM staging.employees_mentah;
-
-        -- 2.2.6. Load dwh.dimweather (dari staging.weather_mentah)
-        INSERT INTO dwh.dimweather (
-            condition, temperature_c, feelslike_c, wind_kph, precip_mm, isday,
-            dateid, locationid
-        )
-        SELECT
-            NULL AS condition,
-            w."temperature_2m_max"        AS temperature_c,
-            NULL                         AS feelslike_c,
-            w."windspeed_10m_max"        AS wind_kph,
-            w."precipitation_sum"        AS precip_mm,
-            NULL                         AS isday,
-            d.dateid,
-            l.locationid
-        FROM staging.weather_mentah w
-        LEFT JOIN dwh.dimdate d
-            ON w."time"::DATE = d.fulldate
-        LEFT JOIN dwh.dimlocation l
-            ON w."CityName" = l.cityname;
-
-        -- ========= FASE 2.3: LOAD TABEL FAKTA (Gabungan dari semua) =========
-        INSERT INTO dwh.factsales (
-            dateid, weatherid, productid, customerid,
-            employeeid, locationid,
-            quantity, totalprice, discount
-        )
-        SELECT
-            d.dateid,
-            w.weatherid,
-            p.productid,
-            c.customerid,
-            e.employeeid,
-            l.locationid,
-            s."Quantity"::INT,
-            s."TotalPrice"::DECIMAL(10, 2),
-            s."Discount"::DECIMAL(10, 2)
-        FROM staging.sales_mentah s
-        LEFT JOIN dwh.dimdate d
-            ON s."SalesDate"::DATE = d.fulldate
-        LEFT JOIN dwh.dimproduct p
-            ON s."ProductID" = p.productid_oltp
-        LEFT JOIN dwh.dimcustomer c
-            ON s."CustomerID" = c.customerid_oltp
-        LEFT JOIN dwh.dimemployee e
-            ON s."SalesPersonID" = e.employeeid_oltp
-        LEFT JOIN dwh.dimlocation l
-            ON c.customercityname = l.cityname
-        LEFT JOIN dwh.dimweather w
-            ON d.dateid = w.dateid AND l.locationid = w.locationid;
+        INSERT INTO dwh.dimdate SELECT * FROM staging.dimdate;
+        INSERT INTO dwh.dimlocation (locationid, cityid_oltp, cityname, countryname) SELECT locationid, cityid_oltp, cityname, countryname FROM staging.dimlocation;
+        INSERT INTO dwh.dimproduct (productid, productid_oltp, productname, price, categoryname, class, isallergic) SELECT productid, productid_oltp, productname, price, categoryname, class, isallergic FROM staging.dimproduct;
+        INSERT INTO dwh.dimcustomer (customerid, customerid_oltp, customername, address, customercityname, customercountryname) SELECT customerid, customerid_oltp, customername, address, customercityname, customercountryname FROM staging.dimcustomer;
+        INSERT INTO dwh.dimemployee (employeeid, employeeid_oltp, employeename, gender, hiredate) SELECT employeeid, employeeid_oltp, employeename, gender, hiredate FROM staging.dimemployee;
+        INSERT INTO dwh.dimweather (weatherid, condition, temperature_c, feelslike_c, wind_kph, precip_mm, isday, dateid, locationid) SELECT weatherid, condition, temperature_c, feelslike_c, wind_kph, precip_mm, isday, dateid, locationid FROM staging.dimweather;
+        
+        INSERT INTO dwh.factsales (dateid, weatherid, productid, customerid, employeeid, locationid, quantity, totalprice, discount) 
+        SELECT dateid, weatherid, productid, customerid, employeeid, locationid, quantity, totalprice, discount FROM staging.factsales;
         """
         
-        # Jalankan satu kueri besar ini di database
-        with engine.begin() as conn:  
-            conn.execute(text(transform_sql))
-            
-        logging.info("FASE 2 (Transformasi) SELESAI.")
+        with engine.begin() as conn:
+            conn.execute(text(load_sql))
+
+        logging.info("FASE 3: Load ke DWH SELESAI.")
+        validate_dwh_counts()
 
     except Exception as e:
         logging.error(f"Error selama proses ELT: {e}")

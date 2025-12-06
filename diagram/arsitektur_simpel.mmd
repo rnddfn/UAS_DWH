@@ -1,0 +1,54 @@
+flowchart TD
+    %% DEFINISI STYLE
+    classDef source fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef storage fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
+    classDef script fill:#e0f2f1,stroke:#00695c,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef dwh fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px;
+    
+    %% GROUP 1: SUMBER DATA
+    subgraph Source ["1. Data Sources"]
+        direction TB
+        CSV("Multiple CSV Files<br>(Sales, Product, Customer,<br>Employee, City, Country)"):::source
+        API("External APIs<br>(Weather & Holiday)"):::source
+    end
+
+    %% GROUP 2: RAW STORAGE
+    subgraph RawLayer ["2. Raw Staging / Data Lake"]
+        RawTables[("Schema: staging<br>(9 Raw Tables)")]:::storage
+    end
+
+    %% PROCESS: TRANSFORM
+    subgraph Process1 ["3. Transformation"]
+        PyTransform[["Python Script<br>(transform.py)"]]:::script
+    end
+
+    %% GROUP 3: CLEAN STORAGE
+    subgraph CleanLayer ["4. Clean Staging"]
+        CleanTables[("Schema: staging_clean<br>(7 Clean Tables)")]:::storage
+    end
+
+    %% PROCESS: LOADING
+    subgraph Process2 ["5. Loading"]
+        PyLoad[["Python Script<br>(load.py)"]]:::script
+    end
+
+    %% GROUP 4: DATA WAREHOUSE
+    subgraph DWLayer ["6. Data Warehouse"]
+        direction TB
+        Fact[("Fact Table<br>(FactSales)")]:::dwh
+        Dims[("Dimension Tables<br>(Product, Customer, Employee,<br>Location, Weather, Date)")]:::dwh
+    end
+
+    %% ALUR DATA
+    CSV -->|Extract| RawTables
+    API -->|Extract| RawTables
+    
+    RawTables -->|Read Raw Data| PyTransform
+    PyTransform -->|Write Clean Data| CleanTables
+    
+    CleanTables -->|Bulk Load| PyLoad
+    PyLoad -->|Insert/Update| Fact
+    PyLoad -->|Insert/Update| Dims
+
+    %% STYLE LINK
+    linkStyle default stroke:#333,stroke-width:1px;

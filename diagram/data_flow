@@ -1,0 +1,16 @@
+%% Diagram Data Flow (DFD) Data Warehouse
+```mermaid
+flowchart TD
+    A["CSV/API Sumber"] --> B["Extract"]
+    B --> C["Data Lake"]
+    C --> D["Transform"]
+    D --> E["Staging Area"]
+    E --> F["Load"]
+    F --> G["Data Warehouse (DWH)"]
+    G --> H["Visualisasi Dashboard"]
+    subgraph Quality_Gate["Quality Gate"]
+        QG["Data Quality Check"]
+    end
+    D --> QG
+    QG --> E
+```

@@ -37,6 +37,7 @@ with DAG(
         mounts=[
             Mount(source='/c/Users/USER/Documents/LocalProjects/Kuliah/BI/UAS_Warehouse/data', target='/usr/src/app/data', type='bind', read_only=True),
             Mount(source='/c/Users/USER/Documents/LocalProjects/Kuliah/BI/UAS_Warehouse/logs', target='/usr/src/app/logs', type='bind', read_only=False),
+            Mount(source='/c/Users/USER/Documents/LocalProjects/Kuliah/BI/UAS_Warehouse/etl.py', target='/usr/src/app/etl.py', type='bind', read_only=True),
         ],
         # Jika perlu mount volume data, gunakan mount param (depends on provider version)
     )

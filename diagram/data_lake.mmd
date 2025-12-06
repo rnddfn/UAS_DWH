@@ -1,0 +1,52 @@
+flowchart LR
+    %% --- DEFINISI STYLE ---
+    classDef csv fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef raw fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
+    classDef API fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,stroke-dasharray: 5 5;
+
+    %% --- 1. DATA SOURCES ---
+    subgraph Source ["Data Sources (External)"]
+        direction TB
+        S1(sales.csv):::csv
+        S2(products.csv):::csv
+        S3(customers.csv):::csv
+        S4(employees.csv):::csv
+        S5(cities.csv):::csv
+        S8(countries.csv):::csv
+        S6(Weather API):::API
+        S7(Holiday API):::API
+    end
+
+    %% --- 2. DATA LAKE / RAW LAYER ---
+    subgraph DataLake ["Data Lake Layer (Schema: staging)"]
+        direction TB
+        %% Menggunakan icon database (silinder) untuk tabel
+        R1[(sales_mentah)]:::raw
+        R2[(products_mentah)]:::raw
+        R3[(customers_mentah)]:::raw
+        R4[(employees_mentah)]:::raw
+        R5[(cities_mentah)]:::raw
+        R8[(countries_mentah)]:::raw
+        R6[(weather_mentah)]:::raw
+        R7[(holidays_mentah)]:::raw
+        R9[(calendar_mentah)]:::raw
+    end
+
+    %% --- ALUR INGESTION ---
+    %% CSV ke Raw Tables
+    S1 -->|Ingest| R1
+    S2 -->|Ingest| R2
+    S3 -->|Ingest| R3
+    S4 -->|Ingest| R4
+    S5 -->|Ingest| R5
+    S8 -->|Ingest| R8
+
+    %% API ke Raw Tables
+    S6 -->|Fetch JSON| R6
+    S7 -->|Fetch JSON| R7
+    
+    %% Calendar Generation (biasanya dipicu saat fetch holiday)
+    S7 -.->|Enrich| R9 
+
+    %% --- PENGATURAN LINK ---
+    linkStyle default stroke:#333,stroke-width:1px;

@@ -1,0 +1,93 @@
+---
+config:
+  layout: fixed
+---
+flowchart LR
+ subgraph RawStaging["Raw Staging / Data Lake (Schema: staging)"]
+    direction TB
+        R1[("sales_mentah")]
+        R2[("products_mentah")]
+        R3[("customers_mentah")]
+        R4[("employees_mentah")]
+        R5[("cities_mentah")]
+        R8[("countries_mentah")]
+        R6[("weather_mentah")]
+        R7[("holidays_mentah")]
+        R9[("calendar_mentah")]
+  end
+ subgraph Transformation["ETL Process (Python)"]
+        T1[["transform.py"]]
+  end
+ subgraph CleanStaging["Data Staging / Clean (Schema: staging_clean)"]
+    direction TB
+        C1[("sales_clean")]
+        C2[("products_clean")]
+        C3[("customers_clean")]
+        C4[("employees_clean")]
+        C5[("cities_clean")]
+        C6[("weather_clean")]
+        C7[("dimdate_clean")]
+  end
+ subgraph Loading["Loading Process (Python)"]
+        L1[["load.py"]]
+  end
+ subgraph DataWarehouse["Data Warehouse (Schema: dwh)"]
+    direction TB
+        D1[("FactSales")]
+        D2[("DimProduct")]
+        D3[("DimCustomer")]
+        D4[("DimEmployee")]
+        D5[("DimLocation")]
+        D6[("DimWeather")]
+        D7[("DimDate")]
+  end
+    R1 --> T1
+    R2 --> T1
+    R3 --> T1
+    R4 --> T1
+    R5 --> T1
+    R8 --> T1
+    R6 --> T1
+    R7 --> T1
+    R9 --> T1
+    T1 --> C1 & C2 & C3 & C4 & C5 & C6 & C7
+    C1 --> L1
+    C2 --> L1
+    C3 --> L1
+    C4 --> L1
+    C5 --> L1
+    C6 --> L1
+    C7 --> L1
+    L1 --> D1 & D2 & D3 & D4 & D5 & D6 & D7
+
+     R1:::raw
+     R2:::raw
+     R3:::raw
+     R4:::raw
+     R5:::raw
+     R8:::raw
+     R6:::raw
+     R7:::raw
+     R9:::raw
+     T1:::process
+     C1:::staging
+     C2:::staging
+     C3:::staging
+     C4:::staging
+     C5:::staging
+     C6:::staging
+     C7:::staging
+     L1:::process0
+     D1:::dwh
+     D2:::dwh
+     D3:::dwh
+     D4:::dwh
+     D5:::dwh
+     D6:::dwh
+     D7:::dwh
+    classDef csv fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef raw fill:#fff9c4,stroke:#fbc02d,stroke-width:2px
+    classDef process fill:#e0f2f1,stroke:#00695c,stroke-width:2px,stroke-dasharray: 5 5
+    classDef staging fill:#d1c4e9,stroke:#512da8,stroke-width:4px
+    classDef dwh fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    classDef API fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,stroke-dasharray: 5 5
